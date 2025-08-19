@@ -18,40 +18,73 @@ class RFIDCommandAPIView(APIView):
 
     def post(self, request):
         serializer = RFIDCommandSerializer(data=request.data, context={"request": request})
-        if serializer.is_valid():
-            instance = serializer.save()
+        
+        if not serializer.is_valid():
+            return self.error_response(
+                message="Validation failed",
+                errors=serializer.errors,
+                status_code=status.HTTP_400_BAD_REQUEST
+            )
 
-            action = request.data.get("Action")
-            if action in ["CheckStatus", "146"]:
-                rfids = request.data.get("RFIDs")
-                if not rfids or not isinstance(rfids, list):
-                    return Response({"error": "RFIDs must be a non-empty list."}, status=status.HTTP_400_BAD_REQUEST)
-                
-                rfid_value = rfids[0]  # Take the first RFID for status check
+        instance = serializer.save()
+        action = request.data.get("Action")
 
-                reply = RFIDAuthorizationCheck.objects.filter(rfid=rfid_value).order_by('-received_at').first()
-                if reply:
-                    status_str = "Authorized" if reply.status == "Authorized" else "Unauthorized"
-                    return Response({
+        # Handle CheckStatus
+        if action in ["CheckStatus", "146"]:
+            rfids = request.data.get("RFIDs")
+            if not rfids or not isinstance(rfids, list):
+                return self.error_response(
+                    message="Invalid RFIDs input",
+                    errors={"RFIDs": "Must be a non-empty list"},
+                    status_code=status.HTTP_400_BAD_REQUEST
+                )
+            
+            rfid_value = rfids[0]
+            reply = RFIDAuthorizationCheck.objects.filter(rfid=rfid_value).order_by('-received_at').first()
+
+            if reply:
+                return self.success_response(
+                    message="RFID status retrieved",
+                    data={
                         "rfid": rfid_value,
-                        "status": status_str,
+                        "status": "Authorized" if reply.status == "Authorized" else "Unauthorized",
                         "timestamp": reply.received_at
-                    }, status=status.HTTP_200_OK)
-                else:
-                    return Response({
-                        "rfid": rfid_value,
-                        "status": "Unknown",
-                        "message": "No authorization reply found for this RFID."
-                    }, status=status.HTTP_404_NOT_FOUND)
+                    }
+                )
+            else:
+                return self.error_response(
+                    message="No authorization reply found for this RFID",
+                    errors={"rfid": rfid_value},
+                    status_code=status.HTTP_404_NOT_FOUND
+                )
 
-            return Response({
-                "message": "Command generated successfully.",
+        # Default response for command generation
+        return self.success_response(
+            message="Command generated successfully",
+            data={
                 "command": instance.formatted_string,
-                "user_id": instance.user_id,
-            }, status=status.HTTP_201_CREATED)
+                "user_id": instance.user_id
+            },
+            status_code=status.HTTP_201_CREATED
+        )
 
-        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+    # Success response helper
+    def success_response(self, message, data=None, status_code=status.HTTP_200_OK):
+        return Response({
+            "success": True,
+            "message": message,
+            "data": data,
+            "errors": None
+        }, status=status_code)
 
+    # Error response helper
+    def error_response(self, message, errors=None, status_code=status.HTTP_400_BAD_REQUEST):
+        return Response({
+            "success": False,
+            "message": message,
+            "data": None,
+            "errors": errors
+        }, status=status_code)
 
 
 class RFIDAuthorizationQueueCreateView(CreateAPIView):
